@@ -11,9 +11,6 @@ import (
 // 默认消息队列大小
 const DefaultQueueSize = 1000
 
-type IReply interface {
-	Reply(msg interface{}) interface{}
-}
 
 type MessageBus interface {
 	// 发布
@@ -236,9 +233,9 @@ type channelMsg struct {
 }
 
 // 处理函数
-type Handler func(topic string, msg interface{})
+type Handler func(topic string, arg interface{})
 
-type HReply func(ctx context.Context, msg ...interface{}) (interface{}, error)
+type HReply func(ctx context.Context, args ...interface{}) (interface{}, error)
 
 // 订阅者
 type subscriber struct {
@@ -383,9 +380,51 @@ func (m *msgTopic) Close() {
 
 	m.mx.Unlock()
 }
+var defaultMsgBus = NewMsgBus()
 
-func add(topic string, args ...interface{}) string {
-
-	return topic + args[0].(string)
+// 发布
+func Publish(topic string, msg interface{}) {
+	defaultMsgBus.Publish(topic, msg)
 }
 
+// 订阅, 返回订阅号
+func Subscribe(topic string, threadCount int, handler Handler) (subscribeId uint32) {
+	return defaultMsgBus.Subscribe(topic, threadCount, handler)
+}
+
+// 全局订阅, 会收到所有消息, 返回订阅号
+func SubscribeGlobal(threadCount int, handler Handler) (subscribeId uint32) {
+	return defaultMsgBus.SubscribeGlobal(threadCount, handler)
+}
+
+// 取消订阅
+func Unsubscribe(topic string, subscribeId uint32) {
+	defaultMsgBus.Unsubscribe(topic, subscribeId)
+}
+
+// 取消全局订阅
+func UnsubscribeGlobal(subscribeId uint32) {
+	defaultMsgBus.UnsubscribeGlobal(subscribeId)
+}
+
+// 关闭主题, 同时关闭所有订阅该主题的订阅者
+func CloseTopic(topic string) {
+	defaultMsgBus.CloseTopic(topic)
+}
+
+// 关闭
+func Close() {
+	defaultMsgBus.Close()
+}
+
+func SubscribeWithReply(topic string, threadCount int, handler HReply) (subscribeId uint32) {
+	return defaultMsgBus.SubscribeWithReply(topic,threadCount,handler)
+}
+
+func Call(topic string, args ...interface{}) (interface{}, error) {
+	return defaultMsgBus.Call(topic,args)
+}
+
+func CallWithContext(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
+	return defaultMsgBus.CallWithContext(ctx,topic,args)
+}
