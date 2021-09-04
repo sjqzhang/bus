@@ -8,14 +8,15 @@ import (
 
 func main() {
 
-	bus.SubscribeWithReply("aa",3, func(ctx context.Context, msg ...interface{}) (interface{}, error) {
+	bus.SubscribeWithReply("aa",3, func(ctx context.Context, args ...interface{}) (interface{}, error) {
 
-		fmt.Println(msg)
-		return "",nil
+
+		return args[0],nil
 	})
 
 	for i:=0;i<100;i++ {
-		bus.Call("aa", "bb")
+		ret,_:=bus.Call("aa", "bb")
+		fmt.Println(ret)
 	}
 	fmt.Println("hello ")
 }

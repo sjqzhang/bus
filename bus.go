@@ -422,9 +422,9 @@ func SubscribeWithReply(topic string, threadCount int, handler HReply) (subscrib
 }
 
 func Call(topic string, args ...interface{}) (interface{}, error) {
-	return defaultMsgBus.Call(topic,args)
+	return defaultMsgBus.Call(topic,args...)
 }
 
 func CallWithContext(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
-	return defaultMsgBus.CallWithContext(ctx,topic,args)
+	return defaultMsgBus.CallWithContext(ctx,topic,args...)
 }
