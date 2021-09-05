@@ -31,10 +31,14 @@ type MessageBus interface {
 
 	SubscribeWithReply(topic string, threadCount int, handler HReply) (subscribeId uint32)
 
+	RegistFunc(funcName string, threadCount int, handler HReply) (uint32, error)
+
 	// 全局订阅, 会收到所有消息
 	SubscribeGlobal(threadCount int, handler Handler) (subscribeId uint32)
 	// 取消订阅
 	Unsubscribe(topic string, subscribeId uint32)
+
+	UnRegistFunc(funcIdentification string, subscribeId uint32)
 	// 取消全局订阅
 	UnsubscribeGlobal(subscribeId uint32)
 	// 关闭主题, 同时关闭所有订阅该主题的订阅者
@@ -71,9 +75,9 @@ func (m *msgBus) Publish(topic string, msg interface{}) {
 	}
 }
 
-func (m *msgBus) CallWithContextDirect(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
+func (m *msgBus) CallWithContextDirect(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
 	m.mx.RLock()
-	handler, ok := m.globalReply[topic]
+	handler, ok := m.globalReply[funcName]
 	m.mx.RUnlock()
 	if !ok {
 		return nil, errors.New("handler not found")
@@ -81,21 +85,28 @@ func (m *msgBus) CallWithContextDirect(ctx context.Context, topic string, args .
 	return handler(ctx, args...)
 }
 
-func (m *msgBus) CallWithContext(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
-	id := fmt.Sprintf("%s_%v", topic, getUUID())
+func (m *msgBus) CallWithContext(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
+	id := fmt.Sprintf("%s_%v", funcName, getUUID())
 	m.rl.Lock()
 	m.globalResult[id] = make(chan result, 1)
 	m.rl.Unlock()
-	m.global.Publish(topic, args) // 发送消息到全局
+	m.global.Publish(funcName, args) // 发送消息到全局
 	m.mx.RLock()
-	t, ok := m.topics[topic]
+	t, ok := m.topics[funcName]
 	m.mx.RUnlock()
-	if ok {
-		t.PublishWithRely(ctx, topic, id, args)
-	}
 	m.rl.RLock()
 	obj2 := m.globalResult[id]
 	m.rl.RUnlock()
+	if ok {
+		t.PublishWithRely(ctx, funcName, id, args)
+	} else {
+		obj2 <- result{
+			data: nil,
+			err:  errors.New(fmt.Sprintf("(ERR)funcName %v not registered.", funcName)),
+		}
+
+	}
+
 	select {
 	case obj := <-obj2:
 		m.rl.Lock()
@@ -107,9 +118,20 @@ func (m *msgBus) CallWithContext(ctx context.Context, topic string, args ...inte
 
 }
 
-func (m *msgBus) Call(topic string, args ...interface{}) (interface{}, error) {
+func (m *msgBus) Call(funcName string, args ...interface{}) (interface{}, error) {
 
-	return m.CallWithContext(context.Background(), topic, args...)
+	return m.CallWithContext(context.Background(), funcName, args...)
+}
+
+func (m *msgBus) RegistFunc(funcName string, threadCount int, handler HReply) (uint32, error) {
+	m.mx.RLock()
+	_, ok := m.globalReply[funcName]
+	m.mx.RUnlock()
+	if ok {
+		return 0, errors.New(fmt.Sprintf("(ERR)funcName %v has registered ", funcName))
+	}
+	m.globalReply[funcName] = handler // add handler
+	return m.SubscribeWithReply(funcName, threadCount, handler), nil
 }
 
 func (m *msgBus) SubscribeWithReply(topic string, threadCount int, handler HReply) (subscribeId uint32) {
@@ -148,6 +170,10 @@ func (m *msgBus) Subscribe(topic string, threadCount int, handler Handler) (subs
 }
 func (m *msgBus) SubscribeGlobal(threadCount int, handler Handler) (subscribeId uint32) {
 	return m.global.Subscribe(m.queueSize, threadCount, handler)
+}
+
+func (m *msgBus) UnRegistFunc(topic string, subscribeId uint32) {
+	m.UnRegistFunc(topic, subscribeId)
 }
 
 func (m *msgBus) Unsubscribe(topic string, subscribeId uint32) {
@@ -434,13 +460,21 @@ func SubscribeWithReply(topic string, threadCount int, handler HReply) (subscrib
 	return defaultMsgBus.SubscribeWithReply(topic, threadCount, handler)
 }
 
-func Call(topic string, args ...interface{}) (interface{}, error) {
-	return defaultMsgBus.Call(topic, args...)
+func Call(funcName string, args ...interface{}) (interface{}, error) {
+	return defaultMsgBus.Call(funcName, args...)
 }
 
-func CallWithContext(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
-	return defaultMsgBus.CallWithContext(ctx, topic, args...)
+func CallWithContext(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
+	return defaultMsgBus.CallWithContext(ctx, funcName, args...)
 }
-func CallWithContextDirect(ctx context.Context, topic string, args ...interface{}) (interface{}, error) {
-	return defaultMsgBus.CallWithContextDirect(ctx, topic, args...)
+func CallWithContextDirect(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
+	return defaultMsgBus.CallWithContextDirect(ctx, funcName, args...)
+}
+
+func RegistFunc(funcName string, threadCount int, handler HReply) (uint32, error) {
+	return defaultMsgBus.RegistFunc(funcName, threadCount, handler)
+}
+
+func UnRegistFunc(funcName string, subscribeId uint32) {
+	defaultMsgBus.Unsubscribe(funcName, subscribeId)
 }
