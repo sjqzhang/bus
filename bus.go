@@ -130,7 +130,6 @@ func (m *msgBus) RegistFunc(funcName string, threadCount int, handler HReply) (u
 	if ok {
 		return 0, errors.New(fmt.Sprintf("(ERR)funcName %v has registered ", funcName))
 	}
-	m.globalReply[funcName] = handler // add handler
 	return m.SubscribeWithReply(funcName, threadCount, handler), nil
 }
 
