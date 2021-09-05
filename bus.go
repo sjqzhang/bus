@@ -86,7 +86,7 @@ func (m *msgBus) CallWithContextDirect(ctx context.Context, funcName string, arg
 }
 
 func (m *msgBus) CallWithContext(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
-	id := fmt.Sprintf("%s_%v", funcName, getUUID())
+	id := fmt.Sprintf("%s_%v", funcName, nextReqId())
 	m.rl.Lock()
 	m.globalResult[id] = make(chan result, 1)
 	m.rl.Unlock()
@@ -237,11 +237,20 @@ func NewMsgBusWithQueueSize(queueSize int) MessageBus {
 
 // 全局自增订阅者id
 var autoIncrSubscriberId uint32
+var reqId uint64
 
 // 生成下一个订阅者id
 func nextSubscriberId() uint32 {
 	return atomic.AddUint32(&autoIncrSubscriberId, 1)
 }
+
+func nextReqId() uint64 {
+	if reqId>(1<<63) {
+		reqId=0
+	}
+	return atomic.AddUint64(&reqId, 1)
+}
+
 
 func md5sum(str string) string {
 	md := md5.New()
