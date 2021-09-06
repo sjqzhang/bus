@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -9,16 +10,21 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // 默认消息队列大小
 const DefaultQueueSize = 1000
+const MESSAGE_KYE = "__CONTEXT_MESSAGE_KYE__"
 
 type MessageBus interface {
 	// 发布
 	Publish(topic string, msg interface{})
+
+	PublishWithContext(ctx context.Context, topic string, msg interface{})
 
 	Call(topic string, args ...interface{}) (interface{}, error)
 
@@ -63,16 +69,18 @@ type msgBus struct {
 	globalResult map[string]chan result
 }
 
-func (m *msgBus) Publish(topic string, msg interface{}) {
-	m.global.Publish(topic, msg) // 发送消息到全局
-
+func (m *msgBus) PublishWithContext(ctx context.Context, topic string, msg interface{}) {
+	m.global.Publish(ctx, topic, msg) // 发送消息到全局
 	m.mx.RLock()
 	t, ok := m.topics[topic]
 	m.mx.RUnlock()
-
 	if ok {
-		t.Publish(topic, msg)
+		t.Publish(ctx, topic, msg)
 	}
+}
+
+func (m *msgBus) Publish(topic string, msg interface{}) {
+	m.PublishWithContext(context.Background(), topic, msg)
 }
 
 func (m *msgBus) CallWithContextDirect(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
@@ -90,7 +98,7 @@ func (m *msgBus) CallWithContext(ctx context.Context, funcName string, args ...i
 	m.rl.Lock()
 	m.globalResult[id] = make(chan result, 1)
 	m.rl.Unlock()
-	m.global.Publish(funcName, args) // 发送消息到全局
+	//m.global.Publish(funcName, args) // 发送消息到全局
 	m.mx.RLock()
 	t, ok := m.topics[funcName]
 	m.mx.RUnlock()
@@ -245,12 +253,20 @@ func nextSubscriberId() uint32 {
 }
 
 func nextReqId() uint64 {
-	if reqId>(1<<63) {
-		reqId=0
+	if reqId > (1 << 63) {
+		reqId = 0
 	}
 	return atomic.AddUint64(&reqId, 1)
 }
 
+func getGoroutineID() uint64 {
+	b := make([]byte, 64)
+	runtime.Stack(b, false)
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
+}
 
 func md5sum(str string) string {
 	md := md5.New()
@@ -268,28 +284,29 @@ func getUUID() string {
 }
 
 // 通道消息
-type channelMsg struct {
-	id    string
-	topic string
-	msg   interface{}
-	ctx   context.Context
+type Message struct {
+	Id        string
+	Topic     string
+	Msg       interface{}
+	Ctx       context.Context
+	TimeStamp int64
 }
 
 // 处理函数
-type Handler func(topic string, arg interface{})
+type Handler func(ctx context.Context, topic string, msg interface{})
 
 type HReply func(ctx context.Context, args ...interface{}) (interface{}, error)
 
 // 订阅者
 type subscriber struct {
 	handler Handler
-	queue   chan *channelMsg
+	queue   chan *Message
 }
 
 // 订阅者
 type subscriberWithReply struct {
 	handler HReply
-	queue   chan *channelMsg
+	queue   chan *Message
 }
 
 // 主题们
@@ -311,13 +328,19 @@ func newMsgTopic(b *msgBus) *msgTopic {
 	}
 }
 
-func (m *msgTopic) Publish(topic string, msg interface{}) {
+func (m *msgTopic) Publish(ctx context.Context, topic string, msg interface{}) {
 	m.mx.RLock()
+	reqId := fmt.Sprintf("%s_%v", topic, nextReqId())
 	for _, sub := range m.subs {
-		sub.queue <- &channelMsg{
-			topic: topic,
-			msg:   msg,
+		message := Message{
+			Topic:     topic,
+			Msg:       msg,
+			Id:        reqId,
+			TimeStamp: time.Now().UnixNano() / 1e6,
 		}
+		ctx = context.WithValue(ctx, MESSAGE_KYE, &message)
+		message.Ctx = ctx
+		sub.queue <- &message
 	}
 	m.mx.RUnlock()
 }
@@ -325,20 +348,25 @@ func (m *msgTopic) Publish(topic string, msg interface{}) {
 func (m *msgTopic) PublishWithRely(ctx context.Context, topic string, id string, msg interface{}) {
 	m.mx.RLock()
 	for _, sub := range m.subsWithReply {
-		sub.queue <- &channelMsg{
-			topic: topic,
-			msg:   msg,
-			id:    id,
-			ctx:   ctx,
+		msg := &Message{
+			Topic:     topic,
+			Msg:       msg,
+			Id:        id,
+			Ctx:       ctx,
+			TimeStamp: time.Now().UnixNano() / 1e6,
 		}
+		ctx = context.WithValue(ctx, MESSAGE_KYE, msg)
+		msg.Ctx = ctx
+		sub.queue <- msg
 	}
+
 	m.mx.RUnlock()
 }
 
 func (m *msgTopic) Subscribe(queueSize int, threadCount int, handler Handler) (subscribeId uint32) {
 	sub := &subscriber{
 		handler: handler,
-		queue:   make(chan *channelMsg, queueSize),
+		queue:   make(chan *Message, queueSize),
 	}
 
 	if threadCount < 1 {
@@ -362,7 +390,7 @@ func (m *msgTopic) Subscribe(queueSize int, threadCount int, handler Handler) (s
 func (m *msgTopic) SubscribeWithReply(b *msgBus, queueSize int, threadCount int, handler HReply) (subscribeId uint32) {
 	sub := &subscriberWithReply{
 		handler: handler,
-		queue:   make(chan *channelMsg, queueSize),
+		queue:   make(chan *Message, queueSize),
 	}
 
 	if threadCount < 1 {
@@ -385,15 +413,15 @@ func (m *msgTopic) SubscribeWithReply(b *msgBus, queueSize int, threadCount int,
 
 func (m *msgTopic) start(sub *subscriber) {
 	for msg := range sub.queue {
-		sub.handler(msg.topic, msg.msg)
+		sub.handler(msg.Ctx, msg.Topic, msg.Msg)
 	}
 }
 
 func (m *msgTopic) startWithRely(sub *subscriberWithReply) {
 	for msg := range sub.queue {
-		data, err := sub.handler(msg.ctx, msg.msg.([]interface{})...)
+		data, err := sub.handler(msg.Ctx, msg.Msg.([]interface{})...)
 		m.bus.rl.Lock()
-		m.bus.globalResult[msg.id] <- result{
+		m.bus.globalResult[msg.Id] <- result{
 			data: data,
 			err:  err,
 		}
@@ -407,6 +435,11 @@ func (m *msgTopic) Unsubscribe(subscribeId uint32) {
 	if ok {
 		close(sub.queue)
 		delete(m.subs, subscribeId)
+	}
+	sub2, ok2 := m.subsWithReply[subscribeId]
+	if ok2 {
+		close(sub2.queue)
+		delete(m.subsWithReply, subscribeId)
 	}
 	m.mx.Unlock()
 }
@@ -432,6 +465,10 @@ var defaultMsgBus = NewMsgBus()
 // 发布
 func Publish(topic string, msg interface{}) {
 	defaultMsgBus.Publish(topic, msg)
+}
+
+func PublishWithContext(ctx context.Context, topic string, msg interface{}) {
+	defaultMsgBus.PublishWithContext(ctx, topic, msg)
 }
 
 // 订阅, 返回订阅号
