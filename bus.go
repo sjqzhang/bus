@@ -22,9 +22,9 @@ const MESSAGE_KYE = "__CONTEXT_MESSAGE_KYE__"
 
 type MessageBus interface {
 	// 发布
-	Publish(topic string, msg interface{})
+	Publish(topic string, msg ...interface{})
 
-	PublishWithContext(ctx context.Context, topic string, msg interface{})
+	PublishWithContext(ctx context.Context, topic string, msg ...interface{})
 
 	Call(topic string, args ...interface{}) (interface{}, error)
 
@@ -69,18 +69,18 @@ type msgBus struct {
 	globalResult map[string]chan result
 }
 
-func (m *msgBus) PublishWithContext(ctx context.Context, topic string, msg interface{}) {
-	m.global.Publish(ctx, topic, msg) // 发送消息到全局
+func (m *msgBus) PublishWithContext(ctx context.Context, topic string, msg ...interface{}) {
+	m.global.Publish(ctx, topic, msg...) // 发送消息到全局
 	m.mx.RLock()
 	t, ok := m.topics[topic]
 	m.mx.RUnlock()
 	if ok {
-		t.Publish(ctx, topic, msg)
+		t.Publish(ctx, topic, msg...)
 	}
 }
 
-func (m *msgBus) Publish(topic string, msg interface{}) {
-	m.PublishWithContext(context.Background(), topic, msg)
+func (m *msgBus) Publish(topic string, msg ...interface{}) {
+	m.PublishWithContext(context.Background(), topic, msg...)
 }
 
 func (m *msgBus) CallWithContextDirect(ctx context.Context, funcName string, args ...interface{}) (interface{}, error) {
@@ -293,7 +293,7 @@ type Message struct {
 }
 
 // 处理函数
-type Handler func(ctx context.Context, topic string, msg interface{})
+type Handler func(ctx context.Context, msgs ...interface{})
 
 type HReply func(ctx context.Context, args ...interface{}) (interface{}, error)
 
@@ -328,7 +328,7 @@ func newMsgTopic(b *msgBus) *msgTopic {
 	}
 }
 
-func (m *msgTopic) Publish(ctx context.Context, topic string, msg interface{}) {
+func (m *msgTopic) Publish(ctx context.Context, topic string, msg ...interface{}) {
 	m.mx.RLock()
 	reqId := fmt.Sprintf("%s_%v", topic, nextReqId())
 	for _, sub := range m.subs {
@@ -345,7 +345,7 @@ func (m *msgTopic) Publish(ctx context.Context, topic string, msg interface{}) {
 	m.mx.RUnlock()
 }
 
-func (m *msgTopic) PublishWithRely(ctx context.Context, topic string, id string, msg interface{}) {
+func (m *msgTopic) PublishWithRely(ctx context.Context, topic string, id string, msg ...interface{}) {
 	m.mx.RLock()
 	for _, sub := range m.subsWithReply {
 		msg := &Message{
@@ -413,7 +413,7 @@ func (m *msgTopic) SubscribeWithReply(b *msgBus, queueSize int, threadCount int,
 
 func (m *msgTopic) start(sub *subscriber) {
 	for msg := range sub.queue {
-		sub.handler(msg.Ctx, msg.Topic, msg.Msg)
+		sub.handler(msg.Ctx, msg.Msg.([]interface{})...)
 	}
 }
 
@@ -463,12 +463,12 @@ func (m *msgTopic) Close() {
 var defaultMsgBus = NewMsgBus()
 
 // 发布
-func Publish(topic string, msg interface{}) {
-	defaultMsgBus.Publish(topic, msg)
+func Publish(topic string, msg ...interface{}) {
+	defaultMsgBus.Publish(topic, msg...)
 }
 
-func PublishWithContext(ctx context.Context, topic string, msg interface{}) {
-	defaultMsgBus.PublishWithContext(ctx, topic, msg)
+func PublishWithContext(ctx context.Context, topic string, msg ...interface{}) {
+	defaultMsgBus.PublishWithContext(ctx, topic, msg...)
 }
 
 // 订阅, 返回订阅号
