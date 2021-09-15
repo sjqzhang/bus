@@ -22,9 +22,9 @@ const MESSAGE_KYE = "__CONTEXT_MESSAGE_KYE__"
 
 type MessageBus interface {
 	// 发布
-	Publish(topic string, msg ...interface{})
+	Publish(topic string, args ...interface{})
 
-	PublishWithContext(ctx context.Context, topic string, msg ...interface{})
+	PublishWithContext(ctx context.Context, topic string, args ...interface{})
 
 	Call(topic string, args ...interface{}) (interface{}, error)
 
@@ -106,7 +106,7 @@ func (m *msgBus) CallWithContext(ctx context.Context, funcName string, args ...i
 	obj2 := m.globalResult[id]
 	m.rl.RUnlock()
 	if ok {
-		t.PublishWithRely(ctx, funcName, id, args)
+		t.PublishWithRely(ctx, funcName, id, args...)
 	} else {
 		obj2 <- result{
 			data: nil,
@@ -293,7 +293,7 @@ type Message struct {
 }
 
 // 处理函数
-type Handler func(ctx context.Context, msgs ...interface{})
+type Handler func(ctx context.Context, args ...interface{})
 
 type HReply func(ctx context.Context, args ...interface{}) (interface{}, error)
 
